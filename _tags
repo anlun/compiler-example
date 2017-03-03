@@ -1,0 +1,4 @@
+true: debug, rectypes
+
+<src/*.ml>: syntax(camlp5o), package(ostap.syntax)
+<src/*.native> or <src/*.byte>: package(re,ostap,GT)
