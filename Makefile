@@ -20,6 +20,7 @@ runtime:
 
 main:
 	$(OB) -Is src $(BYTE_TARGETS) $(NATIVE_TARGETS)
+	cp rc.native rc
 
 clean: 
 	cd runtime && make clean && cd .. && $(RM) -r _build *.log  *.native *.byte

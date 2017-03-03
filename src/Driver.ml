@@ -165,3 +165,6 @@ module StackMachine =
 
 let compile_and_run () =
   StackMachine.run [7; 10] (StackMachine.compile_stmt prog)
+
+let _ =
+  compile_and_run ()
