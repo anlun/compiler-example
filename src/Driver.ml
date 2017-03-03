@@ -1,3 +1,6 @@
+open Ostap
+open Matcher
+
 module Expr =
   struct
     type t  =
@@ -23,6 +26,18 @@ module Expr =
          let lval = eval varst lexpr in
          let rval = eval varst rexpr in
          apply s lval rval
+
+    ostap (
+      parse: add;
+
+      add: l:mul suf:(("+"|"-") mul)* { List.fold_left (fun l (op, r) -> Binop (Token.repr op, l, r)) l suf };
+      mul: l:pri suf:(("*"|"/") pri)* { List.fold_left (fun l (op, r) -> Binop (Token.repr op, l, r)) l suf };
+
+      pri:
+        v:DECIMAL { Const v }
+      | v:IDENT   { Var   v }
+      | -"(" parse -")"
+    )
   end
 
 module Stmt =
@@ -33,6 +48,17 @@ module Stmt =
       | Read   of string
       | Assign of string * Expr.t
       | Seq    of t * t
+
+    ostap (
+      parse:
+        l:stmt suf:(-";" r:stmt)* { List.fold_left (fun l r -> Seq (l, r)) l suf };
+
+      stmt:
+        %"skip"                          { Skip    }
+      | %"write" "(" e:!(Expr.parse) ")" { Write e }
+      | %"read"  "(" v:IDENT         ")" { Read  v }
+      | x:IDENT ":=" e:!(Expr.parse)     { Assign (x, e) }
+    )
   end
   
 let upd f x y = fun z -> if z = x then y else f z
@@ -166,5 +192,40 @@ module StackMachine =
 let compile_and_run () =
   StackMachine.run [7; 10] (StackMachine.compile_stmt prog)
 
-let _ =
-  compile_and_run ()
+let parse infile =
+  let s = Util.read infile in
+  Util.parse
+    (object
+       inherit Matcher.t s
+       inherit Util.Lexers.ident ["read"; "write"; "skip"] s
+       inherit Util.Lexers.decimal s
+       inherit Util.Lexers.skip [
+                   Matcher.Skip.whitespaces "\t\n";
+                   Matcher.Skip.lineComment "--";
+                   Matcher.Skip.nestedComment "(*" "*)"
+                 ] s
+     end
+    )
+    (ostap (!(Stmt.parse) -EOF))
+
+let main =
+  try
+    let mode, filename =
+      match Sys.argv.(1) with
+      | "-s" -> `SM, Sys.argv.(2)
+      (* | "-o" -> `X86, Sys.argv.(2) *)
+      | "-i" -> `Int, Sys.argv.(2)
+      | _ -> raise (Invalid_argument "invalid flag")
+    in
+    match parse filename with
+    | `Ok stmt ->
+       let output =
+         (match mode with
+          | `SM -> )
+       in
+       List.iter (fun i -> Printf.printf "%d\n" i) output
+    | `Fail er -> Printf.eprintf "%s\n" er
+  with
+  | Invalid_argument _ ->
+     Printf.printf "Usage: rc <command> <name.expr>\n";
+     Printf.printf "  <command> should be one of: -i, -s, -o.\n"
