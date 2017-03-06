@@ -52,12 +52,15 @@ module Stmt =
     ostap (
       parse:
         l:stmt suf:(-";" r:stmt)* { List.fold_left (fun l r -> Seq (l, r)) l suf };
-
+      
+      eread:
+        %"read" "(" ")" { fun x -> Read x }
+      | e:!(Expr.parse) { fun x -> Assign (x, e) };
+        
       stmt:
         %"skip"                          { Skip    }
       | %"write" "(" e:!(Expr.parse) ")" { Write e }
-      | %"read"  "(" v:IDENT         ")" { Read  v }
-      | x:IDENT ":=" e:!(Expr.parse)     { Assign (x, e) }
+      | x:IDENT ":=" er:eread            { er    x }
     )
   end
   
@@ -147,6 +150,8 @@ module StackMachine =
       | Stmt.Assign (v, e) -> (compile_expr e) @ [ST v]
       | Stmt.Seq    (l, r) -> (compile_stmt l) @ (compile_stmt r)
                             
+    let compile = compile_stmt
+                            
     type st = (string -> int) *
                 int list * int list * int list * int * t list
             
@@ -200,7 +205,7 @@ let parse infile =
        inherit Util.Lexers.ident ["read"; "write"; "skip"] s
        inherit Util.Lexers.decimal s
        inherit Util.Lexers.skip [
-                   Matcher.Skip.whitespaces "\t\n";
+                   Matcher.Skip.whitespaces " \t\n";
                    Matcher.Skip.lineComment "--";
                    Matcher.Skip.nestedComment "(*" "*)"
                  ] s
@@ -219,11 +224,23 @@ let main =
     in
     match parse filename with
     | `Ok stmt ->
-       let output =
          (match mode with
-          | `SM -> )
-       in
-       List.iter (fun i -> Printf.printf "%d\n" i) output
+          | `SM | `Int ->
+             let rec read acc =
+               try
+                 let r = read_int () in
+                 Printf.printf "> ";
+                 read (acc @ [r])
+               with End_of_file -> acc
+             in
+             let input = read [] in
+             let output =
+               (match mode with
+                | `SM  -> StackMachine.run input (StackMachine.compile stmt)
+                | `Int -> Interpreter .run input stmt)
+             in
+             List.iter (fun i -> Printf.printf "%d\n" i) output
+         )
     | `Fail er -> Printf.eprintf "%s\n" er
   with
   | Invalid_argument _ ->
