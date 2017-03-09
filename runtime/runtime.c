@@ -1,7 +1,7 @@
 # include <stdio.h>
 
 void write(int val) {
-  printf("%d ", val);
+  printf("%d\n", val);
 }
 
 int read() {
