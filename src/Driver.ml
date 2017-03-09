@@ -197,6 +197,137 @@ module StackMachine =
 let compile_and_run () =
   StackMachine.run [7; 10] (StackMachine.compile_stmt prog)
 
+module X86 =
+  struct
+    type opnd = R of int | L of int | M of string | S of int
+                                                       
+    let regs = [|"%ebx"; "%ecx"; "%esi"; "%edi"; "%eax"; "%edx"|]
+    let eax  = R 4
+    let num_of_regs = Array.length regs
+    let word_size = 4
+
+    type t =
+      | X86Binop of string * opnd * opnd
+      | X86Mov   of opnd * opnd
+      | X86Call  of string
+      | X86Push  of opnd
+      | X86Pop   of opnd
+      | X86Ret
+
+    open StackMachine
+       
+    let print instr =
+      let slot s = 
+        match s with
+        | R i -> regs.(i)
+        | S i -> Printf.sprintf "-%d(%%ebp)" (i * word_size)
+        | M x -> x
+        | L i -> Printf.sprintf "$%d" i
+      in
+      match instr with
+      | X86Binop ("+", s1, s2) -> Printf.sprintf "addl\t%s,\t%s"  (slot s1) (slot s2)
+      | X86Binop ("*", s1, s2) -> Printf.sprintf "imull\t%s,\t%s" (slot s1) (slot s2)
+      | X86Mov (s1, s2) -> Printf.sprintf "movl\t%s,\t%s"  (slot s1) (slot s2)
+      | X86Push s       -> Printf.sprintf "pushl\t%s"      (slot s)
+      | X86Pop  s       -> Printf.sprintf "popl\t%s"       (slot s)
+      | X86Ret          -> "ret"
+      | X86Call p       -> Printf.sprintf "call\t%s" p
+
+    let allocate env stack =
+      match stack with
+      | []                              -> R 0
+      | (S n)::_                        -> env#allocate (n+1); S (n+1)
+      | (R n)::_ when n < num_of_regs-3 -> R (n+1)
+      | _                               -> env#allocate 0; S 0
+
+    let compile env code =
+      let rec compile' stack code =
+        match code with
+        | [] -> []
+        | instr :: code' ->
+	   let (asm, stack') = 
+	     match instr with
+	     | READ   -> ([X86Call "read";
+                             X86Mov (eax, R 0)],
+                            [R 0])
+	     | WRITE  -> ([X86Push (R 0);
+                             X86Call "write";
+                             X86Pop (R 0)], [])
+	     | PUSH n -> 
+	        let s = allocate env stack in
+	        ([X86Mov (L n, s)], s::stack)	    
+	     | LD x -> 
+	        env#local x;
+	        let s = allocate env stack in
+	        ([X86Mov (M x, s)], s::stack)
+	     | ST x -> 
+	        env#local x;
+	        let s::stack' = stack in
+	        ([X86Mov (s, M x)], stack')
+	     | BINOP "+" -> 
+	        let x::y::stack' = stack in
+	        ([X86Binop ("+", x, y)], y::stack')
+	     | BINOP "*" -> 
+	        let x::y::stack' = stack in
+	        ([X86Binop ("*", x, y)], y::stack')
+           in 
+	   asm @ compile' stack' code'
+      in
+      compile' [] code
+
+
+    module S = Set.Make (String) 
+    class x86env =
+    object(self)
+      val stack_slots = ref 0
+      val local_vars  = ref S.empty
+      method allocate n = stack_slots := max n !stack_slots
+      method local x  = local_vars := S.add x !local_vars
+      method allocated  = !stack_slots
+      method local_vars = S.elements !local_vars
+    end
+
+    let genasm stmt =
+      let asm  = Buffer.create 1024 in
+      let env  = new x86env in
+      let code = compile env @@ compile_stmt stmt in
+      Buffer.add_string asm "\t.text\n";
+      List.iter 
+        (fun s ->        
+          Buffer.add_string asm (Printf.sprintf "\t.comm\t%s,\t%d,\t%d\n" s word_size word_size)
+        ) 
+        env#local_vars;
+      Buffer.add_string asm "\t.globl\tmain\n";
+      Buffer.add_string asm "main:\n";
+
+      let prologue, epilogue =
+        if env#allocated = 0 
+        then (fun () -> ()), (fun () -> ())
+        else 
+          (fun () -> 
+ 	    Buffer.add_string asm "\tpushq\t%ebp\n";
+	    Buffer.add_string asm "\tmovl\t%esp,\t%ebp\n";
+	    Buffer.add_string asm (Printf.sprintf "\tsubl\t%d,\t%%esp\n" (word_size*env#allocated))
+          ),
+          (fun () -> Buffer.add_string asm "\tpopq\t%ebp\n")
+      in
+      prologue ();
+      List.iter 
+        (fun i -> Buffer.add_string asm (Printf.sprintf "\t%s\n" @@ print i))
+        code;
+      epilogue ();
+      Buffer.add_string asm "\txorl\t%eax,\t%eax\n";
+      Buffer.add_string asm "\tret\n";
+      Buffer.contents asm
+
+    let build stmt name =
+      let outf = open_out (Printf.sprintf "%s.s" name) in
+      Printf.fprintf outf "%s" (genasm stmt);
+      close_out outf;
+      let inc = try Sys.getenv "RC_RUNTIME" with _ -> "../../runtime" in
+      Sys.command (Printf.sprintf "gcc -m32 -o %s %s/runtime.o %s.s" name inc name)
+  end
+
 let parse infile =
   let s = Util.read infile in
   Util.parse
@@ -217,14 +348,17 @@ let main =
   try
     let mode, filename =
       match Sys.argv.(1) with
-      | "-s" -> `SM, Sys.argv.(2)
-      (* | "-o" -> `X86, Sys.argv.(2) *)
+      | "-s" -> `SM , Sys.argv.(2)
+      | "-o" -> `X86, Sys.argv.(2)
       | "-i" -> `Int, Sys.argv.(2)
       | _ -> raise (Invalid_argument "invalid flag")
     in
     match parse filename with
     | `Ok stmt ->
          (match mode with
+          | `X86 ->
+             let basename = Filename.chop_suffix filename ".expr" in 
+	     X86.build stmt basename
           | `SM | `Int ->
              let rec read acc =
                try
@@ -239,10 +373,11 @@ let main =
                 | `SM  -> StackMachine.run input (StackMachine.compile stmt)
                 | `Int -> Interpreter .run input stmt)
              in
-             List.iter (fun i -> Printf.printf "%d\n" i) output
+             List.iter (fun i -> Printf.printf "%d\n" i) output;
+             0
          )
-    | `Fail er -> Printf.eprintf "%s\n" er
+    | `Fail er -> Printf.eprintf "%s\n" er; 1
   with
   | Invalid_argument _ ->
      Printf.printf "Usage: rc <command> <name.expr>\n";
-     Printf.printf "  <command> should be one of: -i, -s, -o.\n"
+     Printf.printf "  <command> should be one of: -i, -s, -o.\n"; 0
