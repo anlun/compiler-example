@@ -1,9 +1,10 @@
 http://www.felixcloutier.com/x86/
-
+```
 + -> addl op1, op2
 - -> subl op1, op2
 * -> imull op1, op2
      'op2' has to be register
+     
 /, % ->
      'idiv' takes eax and divides it on an argument
    op2 / op1:
@@ -30,12 +31,15 @@ http://www.felixcloutier.com/x86/
    setne al
    mov eax, op2
 
-<. <=, ==, !=, >=, > ->
+<, <=, ==, !=, >=, > ->
   xor eax, eax
   cmp op1, op2 // Result to EFLAGS 
   set(**) al
   mov eax, op2
+```
 
+```ocaml
 type instructions =
 ...
 | X86Set of string * string
+```
