@@ -22,7 +22,8 @@ http://www.felixcloutier.com/x86/
    setne al
    andl op2, op2 // 'op2' has to be register
    setne ah
-   and al, ah
+   and ah, al
+   xor ah, ah
    mov eax, op2
   
 || ->
